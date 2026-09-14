@@ -1,3 +1,5 @@
+import "./env";
+
 /*
  * Usage:
  *   npm run dev
@@ -6,8 +8,6 @@
  *     -d "{\"url\":\"https://example.com\"}"
  *   curl -i http://localhost:3000/<shortCode>
  */
-
-import "dotenv/config";
 
 import express, { type Request, type Response } from "express";
 import type { PoolClient } from "pg";

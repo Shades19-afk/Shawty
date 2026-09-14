@@ -1,3 +1,5 @@
+import "../../src/env";
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
 import request from "supertest";

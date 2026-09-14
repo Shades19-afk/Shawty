@@ -9,7 +9,7 @@
     "start": "node dist/index.js",
     "test": "npm run test:unit && npm run test:integration",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration"
+   "test:integration": "cross-env NODE_ENV=test vitest run tests/integration"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
@@ -24,6 +24,7 @@
     "@types/node": "^22.9.0",
     "@types/pg": "^8.11.10",
     "@types/supertest": "^7.2.1",
+    "cross-env": "^10.1.0",
     "supertest": "^7.2.2",
     "tsx": "^4.19.2",
     "typescript": "^5.6.3",
