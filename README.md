@@ -148,7 +148,7 @@ The [GitHub Actions workflow](./.github/workflows/ci.yml) runs on pushes and pul
 
 ## What I'd Do Next
 
-- Cloud deployment and production-grade persistent infrastructure for the existing [`k8s/`](C:/Resume%20Projects/Shawty/k8s) local-validation manifests
+- Cloud deployment and production-grade persistent infrastructure for the existing [`k8s/`](./k8s/) local-validation manifests
 - CDN or edge caching for high-volume redirects
 - A message queue for click events at higher analytics volume
 - Per-user quotas, ownership, deletion, and administrative controls
