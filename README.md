@@ -47,6 +47,10 @@ Three replicas provide horizontal capacity and avoid making one process the only
 
 `/health` checks Postgres and Redis availability, `/metrics` exposes Prometheus counters and latency histograms, and pino emits structured JSON request logs. Together these provide dependency status, service-level trends, and enough request context for debugging.
 
+### Kubernetes manifests
+
+The [`k8s/`](./k8s/) manifests mirror the Compose topology for local kind or minikube validation and interview/demo use. They are not deployed to a cloud provider and are not wired into CI/CD.
+
 ### Analytics API
 
 `GET /stats/:code` queries Postgres directly because analytics is a lower-traffic historical read path where Redis caching would add complexity without improving correctness. Click totals and daily aggregation are computed with SQL `GROUP BY` queries so the application does not fetch and loop over every click row.
@@ -144,7 +148,7 @@ The [GitHub Actions workflow](./.github/workflows/ci.yml) runs on pushes and pul
 
 ## What I'd Do Next
 
-- Kubernetes or a managed container platform for rolling deployments and autoscaling
+- Cloud deployment and production-grade persistent infrastructure for the existing [`k8s/`](C:/Resume%20Projects/Shawty/k8s) local-validation manifests
 - CDN or edge caching for high-volume redirects
 - A message queue for click events at higher analytics volume
 - Per-user quotas, ownership, deletion, and administrative controls

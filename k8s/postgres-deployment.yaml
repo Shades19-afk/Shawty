@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: shawty
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: user
+            - name: POSTGRES_PASSWORD
+              value: CHANGEME
+            - name: POSTGRES_DB
+              value: shawty
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: schema
+              mountPath: /docker-entrypoint-initdb.d/001-schema.sql
+              subPath: 001-schema.sql
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U user -d shawty"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        # Demo-only ephemeral storage; production should use a PVC or managed DB.
+        - name: postgres-data
+          emptyDir: {}
+        - name: schema
+          configMap:
+            name: postgres-schema
