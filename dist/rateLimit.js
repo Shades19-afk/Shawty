@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.createShortenRateLimiter = createShortenRateLimiter;
 const redis_1 = require("./redis");
+const observability_1 = require("./observability");
 const FIXED_WINDOW_SCRIPT = `
 local count = redis.call("INCR", KEYS[1])
 if count == 1 then
@@ -33,6 +34,7 @@ async function enforceLimit(req, res, next, windowMs, maxRequests) {
         const redis = await (0, redis_1.getRedis)();
         const count = Number(await redis.eval(FIXED_WINDOW_SCRIPT, 1, key, windowMs));
         if (count > maxRequests) {
+            (0, observability_1.recordRateLimitRejection)();
             res.setHeader("Retry-After", Math.ceil(windowMs / 1_000));
             res.status(429).json({
                 error: "Too many shortening requests; please try again later",
@@ -41,7 +43,7 @@ async function enforceLimit(req, res, next, windowMs, maxRequests) {
         }
     }
     catch (error) {
-        console.error("Redis rate-limit check failed; allowing request:", error);
+        observability_1.logger.error({ err: error }, "Redis rate-limit check failed; allowing request");
     }
     next();
 }

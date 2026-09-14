@@ -32,6 +32,7 @@ services:
       REDIS_CACHE_TTL_SECONDS: 3600
       SHORTEN_RATE_LIMIT_WINDOW_MS: 60000
       SHORTEN_RATE_LIMIT_MAX: 10
+      HOSTNAME: app1
     depends_on:
       postgres:
         condition: service_healthy
@@ -40,7 +41,9 @@ services:
 
   app2:
     build: .
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      HOSTNAME: app2
     depends_on:
       postgres:
         condition: service_healthy
@@ -49,7 +52,9 @@ services:
 
   app3:
     build: .
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      HOSTNAME: app3
     depends_on:
       postgres:
         condition: service_healthy

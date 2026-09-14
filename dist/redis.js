@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getRedis = getRedis;
 const ioredis_1 = __importDefault(require("ioredis"));
+const observability_1 = require("./observability");
 const redisUrl = process.env.REDIS_URL;
 let redisClient;
 let connectionPromise;
@@ -27,7 +28,7 @@ function getRedis() {
             enableOfflineQueue: false,
         });
         client.on("error", (error) => {
-            console.error("Redis connection error:", error);
+            observability_1.logger.error({ err: error }, "Redis connection error");
         });
         client.on("end", () => {
             redisClient = undefined;

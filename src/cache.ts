@@ -1,4 +1,5 @@
 import { getRedis } from "./redis";
+import { logger, recordCacheHit, recordCacheMiss } from "./observability";
 
 export interface CachedUrl {
   longUrl: string;
@@ -38,18 +39,22 @@ class UrlCache {
       const redis = await getRedis();
       const value = await redis.get(cacheKey(shortCode));
       if (!value) {
+        recordCacheMiss();
         return undefined;
       }
 
       const parsed: unknown = JSON.parse(value);
       if (!isCachedUrl(parsed)) {
-        console.error(`Ignoring malformed Redis cache entry for ${shortCode}`);
+        recordCacheMiss();
+        logger.warn({ shortCode }, "Ignoring malformed Redis cache entry");
         return undefined;
       }
 
+      recordCacheHit();
       return parsed;
     } catch (error: unknown) {
-      console.error("Redis cache read failed:", error);
+      recordCacheMiss();
+      logger.error({ err: error }, "Redis cache read failed");
       return undefined;
     }
   }
@@ -59,7 +64,7 @@ class UrlCache {
       const redis = await getRedis();
       await redis.set(cacheKey(shortCode), JSON.stringify(value), "EX", cacheTtlSeconds);
     } catch (error: unknown) {
-      console.error("Redis cache write failed:", error);
+      logger.error({ err: error }, "Redis cache write failed");
     }
   }
 
@@ -68,7 +73,7 @@ class UrlCache {
       const redis = await getRedis();
       await redis.del(cacheKey(shortCode));
     } catch (error: unknown) {
-      console.error("Redis cache invalidation failed:", error);
+      logger.error({ err: error }, "Redis cache invalidation failed");
     }
   }
 

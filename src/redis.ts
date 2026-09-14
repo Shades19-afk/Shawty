@@ -1,4 +1,5 @@
 import Redis from "ioredis";
+import { logger } from "./observability";
 
 const redisUrl = process.env.REDIS_URL;
 
@@ -29,7 +30,7 @@ export function getRedis(): Promise<Redis> {
     });
 
     client.on("error", (error: Error) => {
-      console.error("Redis connection error:", error);
+      logger.error({ err: error }, "Redis connection error");
     });
     client.on("end", () => {
       redisClient = undefined;

@@ -16,6 +16,12 @@ import { urlCache } from "./cache";
 import { logClick } from "./clicks";
 import { pool } from "./db";
 import { createShortenRateLimiter } from "./rateLimit";
+import { getRedis } from "./redis";
+import {
+  logger,
+  metricsRegistry,
+  recordRequest,
+} from "./observability";
 
 interface ShortenRequestBody {
   url?: unknown;
@@ -34,16 +40,69 @@ interface LongUrlRow {
   long_url: string;
 }
 
-const app = express();
+export const app = express();
 const port = Number(process.env.PORT ?? 3000);
 const configuredBaseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
 
 app.use(express.json());
 
+app.use((req, res, next): void => {
+  const startedAt = process.hrtime.bigint();
+  res.on("finish", () => {
+    const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    const route = typeof req.route?.path === "string" ? req.route.path : req.path;
+    recordRequest(route, res.statusCode, durationSeconds);
+    logger.info(
+      {
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        responseTimeMs: Number((durationSeconds * 1_000).toFixed(3)),
+      },
+      "request completed",
+    );
+  });
+  next();
+});
+
 const shortenRateLimiter = createShortenRateLimiter(
   Number(process.env.SHORTEN_RATE_LIMIT_WINDOW_MS ?? 60_000),
   Number(process.env.SHORTEN_RATE_LIMIT_MAX ?? 10),
 );
+
+app.get("/health", async (_req: Request, res: Response): Promise<void> => {
+  const dependencyStatus = {
+    postgres: "ok",
+    redis: "ok",
+  };
+
+  try {
+    await pool.query("SELECT 1");
+  } catch (error: unknown) {
+    dependencyStatus.postgres = "error";
+    logger.error({ err: error }, "Postgres health check failed");
+  }
+
+  try {
+    const redis = await getRedis();
+    await redis.ping();
+  } catch (error: unknown) {
+    dependencyStatus.redis = "error";
+    logger.error({ err: error }, "Redis health check failed");
+  }
+
+  const healthy =
+    dependencyStatus.postgres === "ok" && dependencyStatus.redis === "ok";
+  res.status(healthy ? 200 : 503).json({
+    status: healthy ? "ok" : "error",
+    ...dependencyStatus,
+  });
+});
+
+app.get("/metrics", async (_req: Request, res: Response): Promise<void> => {
+  res.setHeader("Content-Type", metricsRegistry.contentType);
+  res.send(await metricsRegistry.metrics());
+});
 
 app.post(
   "/shorten",
@@ -109,10 +168,10 @@ app.post(
         try {
           await client.query("ROLLBACK");
         } catch (rollbackError) {
-          console.error("Failed to roll back URL creation:", rollbackError);
+          logger.error({ err: rollbackError }, "Failed to roll back URL creation");
         }
       }
-      console.error("Failed to shorten URL:", error);
+      logger.error({ err: error }, "Failed to shorten URL");
       res.status(500).json({ error: "Unable to shorten URL" });
     } finally {
       client?.release();
@@ -148,15 +207,17 @@ app.get(
 
       res.redirect(302, cached.longUrl);
       void logClick(cached.urlId).catch((error: unknown) => {
-        console.error("Failed to log click:", error);
+        logger.error({ err: error }, "Failed to log click");
       });
     } catch (error) {
-      console.error("Failed to resolve short URL:", error);
+      logger.error({ err: error }, "Failed to resolve short URL");
       res.status(500).json({ error: "Unable to resolve short URL" });
     }
   },
 );
 
-app.listen(port, () => {
-  console.log(`URL shortener listening on port ${port}`);
-});
+if (require.main === module) {
+  app.listen(port, () => {
+    logger.info({ port }, "URL shortener listening");
+  });
+}

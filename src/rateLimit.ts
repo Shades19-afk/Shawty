@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { getRedis } from "./redis";
+import { logger, recordRateLimitRejection } from "./observability";
 
 const FIXED_WINDOW_SCRIPT = `
 local count = redis.call("INCR", KEYS[1])
@@ -48,6 +49,7 @@ async function enforceLimit(
     );
 
     if (count > maxRequests) {
+      recordRateLimitRejection();
       res.setHeader("Retry-After", Math.ceil(windowMs / 1_000));
       res.status(429).json({
         error: "Too many shortening requests; please try again later",
@@ -55,7 +57,10 @@ async function enforceLimit(
       return;
     }
   } catch (error: unknown) {
-    console.error("Redis rate-limit check failed; allowing request:", error);
+    logger.error(
+      { err: error },
+      "Redis rate-limit check failed; allowing request",
+    );
   }
 
   next();

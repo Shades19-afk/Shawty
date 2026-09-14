@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.urlCache = void 0;
 const redis_1 = require("./redis");
+const observability_1 = require("./observability");
 const CACHE_KEY_PREFIX = "url:";
 const cacheTtlSeconds = Number(process.env.REDIS_CACHE_TTL_SECONDS ?? 3_600);
 if (!Number.isInteger(cacheTtlSeconds) || cacheTtlSeconds < 1) {
@@ -30,17 +31,21 @@ class UrlCache {
             const redis = await (0, redis_1.getRedis)();
             const value = await redis.get(cacheKey(shortCode));
             if (!value) {
+                (0, observability_1.recordCacheMiss)();
                 return undefined;
             }
             const parsed = JSON.parse(value);
             if (!isCachedUrl(parsed)) {
-                console.error(`Ignoring malformed Redis cache entry for ${shortCode}`);
+                (0, observability_1.recordCacheMiss)();
+                observability_1.logger.warn({ shortCode }, "Ignoring malformed Redis cache entry");
                 return undefined;
             }
+            (0, observability_1.recordCacheHit)();
             return parsed;
         }
         catch (error) {
-            console.error("Redis cache read failed:", error);
+            (0, observability_1.recordCacheMiss)();
+            observability_1.logger.error({ err: error }, "Redis cache read failed");
             return undefined;
         }
     }
@@ -50,7 +55,7 @@ class UrlCache {
             await redis.set(cacheKey(shortCode), JSON.stringify(value), "EX", cacheTtlSeconds);
         }
         catch (error) {
-            console.error("Redis cache write failed:", error);
+            observability_1.logger.error({ err: error }, "Redis cache write failed");
         }
     }
     async invalidate(shortCode) {
@@ -59,7 +64,7 @@ class UrlCache {
             await redis.del(cacheKey(shortCode));
         }
         catch (error) {
-            console.error("Redis cache invalidation failed:", error);
+            observability_1.logger.error({ err: error }, "Redis cache invalidation failed");
         }
     }
     async update(shortCode, value) {

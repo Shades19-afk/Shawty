@@ -11,6 +11,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.app = void 0;
 require("dotenv/config");
 const express_1 = __importDefault(require("express"));
 const base62_1 = require("./base62");
@@ -18,12 +19,59 @@ const cache_1 = require("./cache");
 const clicks_1 = require("./clicks");
 const db_1 = require("./db");
 const rateLimit_1 = require("./rateLimit");
-const app = (0, express_1.default)();
+const redis_1 = require("./redis");
+const observability_1 = require("./observability");
+exports.app = (0, express_1.default)();
 const port = Number(process.env.PORT ?? 3000);
 const configuredBaseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
-app.use(express_1.default.json());
+exports.app.use(express_1.default.json());
+exports.app.use((req, res, next) => {
+    const startedAt = process.hrtime.bigint();
+    res.on("finish", () => {
+        const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+        const route = typeof req.route?.path === "string" ? req.route.path : req.path;
+        (0, observability_1.recordRequest)(route, res.statusCode, durationSeconds);
+        observability_1.logger.info({
+            method: req.method,
+            path: req.path,
+            statusCode: res.statusCode,
+            responseTimeMs: Number((durationSeconds * 1_000).toFixed(3)),
+        }, "request completed");
+    });
+    next();
+});
 const shortenRateLimiter = (0, rateLimit_1.createShortenRateLimiter)(Number(process.env.SHORTEN_RATE_LIMIT_WINDOW_MS ?? 60_000), Number(process.env.SHORTEN_RATE_LIMIT_MAX ?? 10));
-app.post("/shorten", shortenRateLimiter, async (req, res) => {
+exports.app.get("/health", async (_req, res) => {
+    const dependencyStatus = {
+        postgres: "ok",
+        redis: "ok",
+    };
+    try {
+        await db_1.pool.query("SELECT 1");
+    }
+    catch (error) {
+        dependencyStatus.postgres = "error";
+        observability_1.logger.error({ err: error }, "Postgres health check failed");
+    }
+    try {
+        const redis = await (0, redis_1.getRedis)();
+        await redis.ping();
+    }
+    catch (error) {
+        dependencyStatus.redis = "error";
+        observability_1.logger.error({ err: error }, "Redis health check failed");
+    }
+    const healthy = dependencyStatus.postgres === "ok" && dependencyStatus.redis === "ok";
+    res.status(healthy ? 200 : 503).json({
+        status: healthy ? "ok" : "error",
+        ...dependencyStatus,
+    });
+});
+exports.app.get("/metrics", async (_req, res) => {
+    res.setHeader("Content-Type", observability_1.metricsRegistry.contentType);
+    res.send(await observability_1.metricsRegistry.metrics());
+});
+exports.app.post("/shorten", shortenRateLimiter, async (req, res) => {
     const { url } = req.body;
     if (typeof url !== "string" || url.trim().length === 0) {
         res.status(400).json({ error: "Request body must include a non-empty url string" });
@@ -70,17 +118,17 @@ app.post("/shorten", shortenRateLimiter, async (req, res) => {
                 await client.query("ROLLBACK");
             }
             catch (rollbackError) {
-                console.error("Failed to roll back URL creation:", rollbackError);
+                observability_1.logger.error({ err: rollbackError }, "Failed to roll back URL creation");
             }
         }
-        console.error("Failed to shorten URL:", error);
+        observability_1.logger.error({ err: error }, "Failed to shorten URL");
         res.status(500).json({ error: "Unable to shorten URL" });
     }
     finally {
         client?.release();
     }
 });
-app.get("/:code", async (req, res) => {
+exports.app.get("/:code", async (req, res) => {
     const { code } = req.params;
     try {
         let cached = await cache_1.urlCache.get(code);
@@ -96,14 +144,16 @@ app.get("/:code", async (req, res) => {
         }
         res.redirect(302, cached.longUrl);
         void (0, clicks_1.logClick)(cached.urlId).catch((error) => {
-            console.error("Failed to log click:", error);
+            observability_1.logger.error({ err: error }, "Failed to log click");
         });
     }
     catch (error) {
-        console.error("Failed to resolve short URL:", error);
+        observability_1.logger.error({ err: error }, "Failed to resolve short URL");
         res.status(500).json({ error: "Unable to resolve short URL" });
     }
 });
-app.listen(port, () => {
-    console.log(`URL shortener listening on port ${port}`);
-});
+if (require.main === module) {
+    exports.app.listen(port, () => {
+        observability_1.logger.info({ port }, "URL shortener listening");
+    });
+}
