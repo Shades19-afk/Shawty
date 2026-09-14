@@ -44,6 +44,15 @@ interface LongUrlRow {
   expires_at: string;
 }
 
+interface StatsRow {
+  short_code: string;
+  long_url: string;
+  created_at: string;
+  expires_at: string;
+  total_clicks: number;
+  clicks_by_day: Array<{ date: string; count: number }>;
+}
+
 export const app = express();
 const port = Number(process.env.PORT ?? 3000);
 const configuredBaseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
@@ -233,6 +242,79 @@ app.post(
       res.status(500).json({ error: "Unable to shorten URL" });
     } finally {
       client?.release();
+    }
+  },
+);
+
+app.get(
+  "/stats/:code",
+  async (
+    req: Request<CodeRouteParams>,
+    res: Response,
+  ): Promise<void> => {
+    // Stats are a lower-traffic historical read path, so query Postgres
+    // directly instead of adding Redis caching and its staleness complexity.
+    // A separate, more permissive rate limit could be added if this became
+    // public-facing at scale.
+    const { code } = req.params;
+
+    try {
+      const result = await pool.query<StatsRow>(
+        `WITH click_totals AS (
+           SELECT url_id, COUNT(*)::int AS total_clicks
+           FROM clicks
+           GROUP BY url_id
+         ),
+         daily_clicks AS (
+           SELECT
+             url_id,
+             date_trunc('day', clicked_at) AS click_day,
+             COUNT(*)::int AS click_count
+           FROM clicks
+           GROUP BY url_id, date_trunc('day', clicked_at)
+         )
+         SELECT
+           u.short_code,
+           u.long_url,
+           u.created_at,
+           u.expires_at,
+           COALESCE(ct.total_clicks, 0)::int AS total_clicks,
+           COALESCE(
+             json_agg(
+               json_build_object(
+                 'date', to_char(dc.click_day, 'YYYY-MM-DD'),
+                 'count', dc.click_count
+               )
+               ORDER BY dc.click_day
+             ) FILTER (WHERE dc.click_day IS NOT NULL),
+             '[]'::json
+           ) AS clicks_by_day
+         FROM urls u
+         LEFT JOIN click_totals ct ON ct.url_id = u.id
+         LEFT JOIN daily_clicks dc ON dc.url_id = u.id
+         WHERE u.short_code = $1
+         GROUP BY u.id, u.short_code, u.long_url, u.created_at, u.expires_at,
+                  ct.total_clicks`,
+        [code],
+      );
+
+      const row = result.rows[0];
+      if (!row) {
+        res.status(404).json({ error: "Short URL not found" });
+        return;
+      }
+
+      res.status(200).json({
+        shortCode: row.short_code,
+        longUrl: row.long_url,
+        createdAt: row.created_at,
+        expiresAt: row.expires_at,
+        totalClicks: row.total_clicks,
+        clicksByDay: row.clicks_by_day,
+      });
+    } catch (error: unknown) {
+      logger.error({ err: error }, "Failed to retrieve URL stats");
+      res.status(500).json({ error: "Unable to retrieve URL stats" });
     }
   },
 );

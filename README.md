@@ -47,6 +47,10 @@ Three replicas provide horizontal capacity and avoid making one process the only
 
 `/health` checks Postgres and Redis availability, `/metrics` exposes Prometheus counters and latency histograms, and pino emits structured JSON request logs. Together these provide dependency status, service-level trends, and enough request context for debugging.
 
+### Analytics API
+
+`GET /stats/:code` queries Postgres directly because analytics is a lower-traffic historical read path where Redis caching would add complexity without improving correctness. Click totals and daily aggregation are computed with SQL `GROUP BY` queries so the application does not fetch and loop over every click row.
+
 ## Running Locally
 
 ### Docker Compose
@@ -67,6 +71,8 @@ curl -i -X POST http://localhost:8080/shorten \
   -d '{"url":"https://example.com"}'
 
 curl -i http://localhost:8080/<shortCode>
+
+curl -s http://localhost:8080/stats/<shortCode>
 ```
 
 To reset the database and Redis volumes:

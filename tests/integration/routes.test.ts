@@ -124,6 +124,68 @@ describe("URL shortener routes", () => {
     expect(clicks.rows).toHaveLength(0);
   });
 
+  it("returns 404 for stats on a missing code", async () => {
+    const response = await request(app).get("/stats/does-not-exist");
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: "Short URL not found" });
+  });
+
+  it("returns click totals and daily stats", async () => {
+    const created = await request(app)
+      .post("/shorten")
+      .send({ url: "https://example.com/stats-test" });
+
+    const redirects = await Promise.all([
+      request(app).get(`/${created.body.shortCode}`).redirects(0),
+      request(app).get(`/${created.body.shortCode}`).redirects(0),
+      request(app).get(`/${created.body.shortCode}`).redirects(0),
+    ]);
+    expect(redirects.every((response) => response.status === 302)).toBe(true);
+
+    const today = new Date().toISOString().slice(0, 10);
+    let stats;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      stats = await request(app).get(`/stats/${created.body.shortCode}`);
+      if (stats.body.totalClicks === 3) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+
+    expect(stats?.status).toBe(200);
+    expect(stats?.body).toMatchObject({
+      shortCode: created.body.shortCode,
+      longUrl: "https://example.com/stats-test",
+      totalClicks: 3,
+      clicksByDay: [{ date: today, count: 3 }],
+    });
+    expect(stats?.body.createdAt).toEqual(expect.any(String));
+    expect(stats?.body.expiresAt).toEqual(expect.any(String));
+  });
+
+  it("keeps stats available after a link expires", async () => {
+    const expiredCode = `stats-expired-${Date.now()}`;
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO urls (short_code, long_url, expires_at)
+       VALUES ($1, $2, NOW() - interval '1 minute')
+       RETURNING id`,
+      [expiredCode, "https://example.com/stats-expired"],
+    );
+    await pool.query(
+      "INSERT INTO clicks (url_id, clicked_at) VALUES ($1, NOW())",
+      [inserted.rows[0].id],
+    );
+
+    const redirect = await request(app).get(`/${expiredCode}`).redirects(0);
+    expect(redirect.status).toBe(410);
+
+    const stats = await request(app).get(`/stats/${expiredCode}`);
+    expect(stats.status).toBe(200);
+    expect(stats.body.totalClicks).toBe(1);
+    expect(stats.body.clicksByDay).toHaveLength(1);
+  });
+
   it("returns 404 for a missing code", async () => {
     const response = await request(app).get("/does-not-exist");
 
