@@ -1,0 +1,18 @@
+CREATE SEQUENCE IF NOT EXISTS url_id_seq;
+
+CREATE TABLE IF NOT EXISTS urls (
+  id BIGINT PRIMARY KEY DEFAULT nextval('url_id_seq'),
+  short_code TEXT UNIQUE,
+  long_url TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+ALTER SEQUENCE url_id_seq OWNED BY urls.id;
+
+CREATE TABLE IF NOT EXISTS clicks (
+  id BIGSERIAL PRIMARY KEY,
+  url_id BIGINT NOT NULL REFERENCES urls(id) ON DELETE CASCADE,
+  clicked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS clicks_url_id_idx ON clicks(url_id);
