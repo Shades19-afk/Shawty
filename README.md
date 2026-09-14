@@ -103,10 +103,22 @@ npm run test:unit
 
 Run integration tests with the test Compose override:
 
+Start the test dependencies:
+
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml up -d postgres redis
-DATABASE_URL=postgresql://postgres:postgres@localhost:5433/shortener \
-REDIS_URL=redis://localhost:6380 \
+```
+
+Create a `.env.test` file with:
+
+```dotenv
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/shortener
+REDIS_URL=redis://localhost:6380
+```
+
+Then run:
+
+```bash
 npm run test:integration
 ```
 
