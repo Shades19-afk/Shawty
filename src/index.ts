@@ -17,6 +17,7 @@ import { logClick } from "./clicks";
 import { pool } from "./db";
 import { createShortenRateLimiter } from "./rateLimit";
 import { getRedis } from "./redis";
+import { isValidCustomCode } from "./validation";
 import {
   logger,
   metricsRegistry,
@@ -25,6 +26,7 @@ import {
 
 interface ShortenRequestBody {
   url?: unknown;
+  customCode?: unknown;
 }
 
 interface CodeRouteParams {
@@ -111,7 +113,7 @@ app.post(
     req: Request<Record<string, never>, unknown, ShortenRequestBody>,
     res: Response,
   ): Promise<void> => {
-    const { url } = req.body;
+    const { url, customCode } = req.body;
 
     if (typeof url !== "string" || url.trim().length === 0) {
       res.status(400).json({ error: "Request body must include a non-empty url string" });
@@ -131,45 +133,95 @@ app.post(
       return;
     }
 
+    const hasCustomCode = customCode !== undefined && customCode !== "";
+    if (
+      hasCustomCode &&
+      !isValidCustomCode(
+        typeof customCode === "string" ? customCode : null,
+      )
+    ) {
+      res.status(400).json({
+        error:
+          "Custom code must be 3 to 20 characters and contain only letters, digits, hyphens, or underscores",
+      });
+      return;
+    }
+
     let client: PoolClient | undefined;
     try {
       client = await pool.connect();
       await client.query("BEGIN");
 
-      // The sequence-generated id is unique. Encoding it creates a
-      // deterministic short code without randomness or retry-on-collision logic.
-      const inserted = await client.query<UrlRow>(
-        "INSERT INTO urls (long_url) VALUES ($1) RETURNING id",
-        [parsedUrl.toString()],
-      );
+      let shortCode: string;
+      let urlId: string;
+      if (hasCustomCode) {
+        if (typeof customCode !== "string") {
+          throw new Error("Validated custom code was not a string");
+        }
+        const requestedCode = customCode;
+        const existing = await client.query(
+          "SELECT 1 FROM urls WHERE short_code = $1",
+          [requestedCode],
+        );
+        if (existing.rows.length > 0) {
+          await client.query("ROLLBACK");
+          res.status(409).json({ error: "Custom code already in use" });
+          return;
+        }
 
-      const id = Number(inserted.rows[0]?.id);
-      if (!Number.isSafeInteger(id) || id < 0) {
-        throw new Error("Database returned an invalid URL id");
+        const inserted = await client.query<UrlRow>(
+          "INSERT INTO urls (short_code, long_url) VALUES ($1, $2) RETURNING id",
+          [requestedCode, parsedUrl.toString()],
+        );
+        shortCode = requestedCode;
+        urlId = inserted.rows[0].id;
+      } else {
+        // The sequence-generated id is unique. Encoding it creates a
+        // deterministic short code without randomness or retry-on-collision logic.
+        const inserted = await client.query<UrlRow>(
+          "INSERT INTO urls (long_url) VALUES ($1) RETURNING id",
+          [parsedUrl.toString()],
+        );
+
+        const id = Number(inserted.rows[0]?.id);
+        if (!Number.isSafeInteger(id) || id < 0) {
+          throw new Error("Database returned an invalid URL id");
+        }
+
+        shortCode = encodeBase62(id);
+        urlId = inserted.rows[0].id;
+        await client.query(
+          "UPDATE urls SET short_code = $1 WHERE id = $2",
+          [shortCode, urlId],
+        );
       }
-
-      const shortCode = encodeBase62(id);
-      await client.query(
-        "UPDATE urls SET short_code = $1 WHERE id = $2",
-        [shortCode, inserted.rows[0].id],
-      );
 
       await client.query("COMMIT");
       await urlCache.update(shortCode, {
         longUrl: parsedUrl.toString(),
-        urlId: inserted.rows[0].id,
+        urlId,
       });
       res.status(201).json({
         shortCode,
         shortUrl: `${configuredBaseUrl.replace(/\/+$/, "")}/${shortCode}`,
       });
-    } catch (error) {
+    } catch (error: unknown) {
       if (client) {
         try {
           await client.query("ROLLBACK");
         } catch (rollbackError) {
           logger.error({ err: rollbackError }, "Failed to roll back URL creation");
         }
+      }
+      if (
+        hasCustomCode &&
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "23505"
+      ) {
+        res.status(409).json({ error: "Custom code already in use" });
+        return;
       }
       logger.error({ err: error }, "Failed to shorten URL");
       res.status(500).json({ error: "Unable to shorten URL" });

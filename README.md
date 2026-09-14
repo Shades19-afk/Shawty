@@ -27,6 +27,8 @@ Nginx (round robin)
 
 The database sequence provides a unique numeric ID, which is encoded in base62 to produce the short code. This is collision-free by construction. Random generation would require collision checks and retries, while hashing would add unnecessary complexity without improving lookup behavior.
 
+Custom short codes are accepted when they use 3-20 letters, digits, hyphens, or underscores. The `short_code` column has a unique database constraint, which remains the source of truth for race-safe conflict handling when concurrent requests choose the same code.
+
 ### Redis for cache and rate limiting
 
 Redis provides low-latency shared state for all app replicas. Cache failures fail open to a Postgres fallback so redirects remain available, even though database traffic increases. The rate limiter also fails open: a Redis outage weakens abuse protection temporarily rather than making every shortening request unavailable.
@@ -137,7 +139,7 @@ The [GitHub Actions workflow](./.github/workflows/ci.yml) runs on pushes and pul
 - Kubernetes or a managed container platform for rolling deployments and autoscaling
 - CDN or edge caching for high-volume redirects
 - A message queue for click events at higher analytics volume
-- Custom short codes and link expiration
+- Link expiration
 - Per-user quotas, ownership, deletion, and administrative controls
 
 These are intentionally outside the current scope; the current build focuses on a small, testable service and the core distributed-systems trade-offs.
