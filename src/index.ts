@@ -35,11 +35,13 @@ interface CodeRouteParams {
 
 interface UrlRow {
   id: string;
+  expires_at: string;
 }
 
 interface LongUrlRow {
   id: string;
   long_url: string;
+  expires_at: string;
 }
 
 export const app = express();
@@ -154,6 +156,7 @@ app.post(
 
       let shortCode: string;
       let urlId: string;
+      let expiresAt: string;
       if (hasCustomCode) {
         if (typeof customCode !== "string") {
           throw new Error("Validated custom code was not a string");
@@ -170,16 +173,17 @@ app.post(
         }
 
         const inserted = await client.query<UrlRow>(
-          "INSERT INTO urls (short_code, long_url) VALUES ($1, $2) RETURNING id",
+          "INSERT INTO urls (short_code, long_url, expires_at) VALUES ($1, $2, NOW() + interval '30 days') RETURNING id, expires_at",
           [requestedCode, parsedUrl.toString()],
         );
         shortCode = requestedCode;
         urlId = inserted.rows[0].id;
+        expiresAt = inserted.rows[0].expires_at;
       } else {
         // The sequence-generated id is unique. Encoding it creates a
         // deterministic short code without randomness or retry-on-collision logic.
         const inserted = await client.query<UrlRow>(
-          "INSERT INTO urls (long_url) VALUES ($1) RETURNING id",
+          "INSERT INTO urls (long_url, expires_at) VALUES ($1, NOW() + interval '30 days') RETURNING id, expires_at",
           [parsedUrl.toString()],
         );
 
@@ -190,6 +194,7 @@ app.post(
 
         shortCode = encodeBase62(id);
         urlId = inserted.rows[0].id;
+        expiresAt = inserted.rows[0].expires_at;
         await client.query(
           "UPDATE urls SET short_code = $1 WHERE id = $2",
           [shortCode, urlId],
@@ -200,6 +205,7 @@ app.post(
       await urlCache.update(shortCode, {
         longUrl: parsedUrl.toString(),
         urlId,
+        expiresAt,
       });
       res.status(201).json({
         shortCode,
@@ -243,7 +249,7 @@ app.get(
       let cached = await urlCache.get(code);
       if (!cached) {
         const result = await pool.query<LongUrlRow>(
-          "SELECT id, long_url FROM urls WHERE short_code = $1",
+          "SELECT id, long_url, expires_at FROM urls WHERE short_code = $1",
           [code],
         );
 
@@ -253,8 +259,22 @@ app.get(
           return;
         }
 
-        cached = { longUrl: row.long_url, urlId: row.id };
+        if (new Date(row.expires_at).getTime() <= Date.now()) {
+          res.status(410).json({ error: "This link has expired" });
+          return;
+        }
+
+        cached = {
+          longUrl: row.long_url,
+          urlId: row.id,
+          expiresAt: row.expires_at,
+        };
         await urlCache.set(code, cached);
+      }
+
+      if (new Date(cached.expiresAt).getTime() <= Date.now()) {
+        res.status(410).json({ error: "This link has expired" });
+        return;
       }
 
       res.redirect(302, cached.longUrl);

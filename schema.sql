@@ -4,8 +4,15 @@ CREATE TABLE IF NOT EXISTS urls (
   id BIGINT PRIMARY KEY DEFAULT nextval('url_id_seq'),
   short_code TEXT UNIQUE,
   long_url TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL
 );
+
+ALTER TABLE urls ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+UPDATE urls
+SET expires_at = created_at + interval '30 days'
+WHERE expires_at IS NULL;
+ALTER TABLE urls ALTER COLUMN expires_at SET NOT NULL;
 
 ALTER SEQUENCE url_id_seq OWNED BY urls.id;
 

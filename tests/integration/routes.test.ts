@@ -5,11 +5,14 @@ import { readFile } from "node:fs/promises";
 import request from "supertest";
 import { pool } from "../../src/db";
 import { app } from "../../src/index";
+import { getRedis } from "../../src/redis";
 
 describe("URL shortener routes", () => {
   beforeAll(async () => {
     const schema = await readFile("schema.sql", "utf8");
     await pool.query(schema);
+    const redis = await getRedis();
+    await redis.flushdb();
     await pool.query("SELECT 1");
   });
 
@@ -30,17 +33,18 @@ describe("URL shortener routes", () => {
   });
 
   it("creates and redirects with an available custom code", async () => {
+    const customCode = `my-${Date.now()}`;
     const response = await request(app)
       .post("/shorten")
       .send({
         url: "https://example.com/custom-code",
-        customCode: "my-link",
+        customCode,
       });
 
     expect(response.status).toBe(201);
-    expect(response.body.shortCode).toBe("my-link");
+    expect(response.body.shortCode).toBe(customCode);
 
-    const redirect = await request(app).get("/my-link").redirects(0);
+    const redirect = await request(app).get(`/${customCode}`).redirects(0);
     expect(redirect.status).toBe(302);
     expect(redirect.headers.location).toBe("https://example.com/custom-code");
   });
@@ -55,13 +59,14 @@ describe("URL shortener routes", () => {
   });
 
   it("rejects a custom code that is already in use", async () => {
+    const customCode = `taken-${Date.now()}`;
     await request(app)
       .post("/shorten")
-      .send({ url: "https://example.com/first", customCode: "taken-code" });
+      .send({ url: "https://example.com/first", customCode });
 
     const response = await request(app)
       .post("/shorten")
-      .send({ url: "https://example.com/second", customCode: "taken-code" });
+      .send({ url: "https://example.com/second", customCode });
 
     expect(response.status).toBe(409);
     expect(response.body).toEqual({ error: "Custom code already in use" });
@@ -96,6 +101,27 @@ describe("URL shortener routes", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.location).toBe("https://example.com/redirect-test");
+  });
+
+  it("returns 410 and does not log clicks for an expired link", async () => {
+    const expiredCode = `expired-${Date.now()}`;
+    const inserted = await pool.query<{ id: string }>(
+      `INSERT INTO urls (short_code, long_url, expires_at)
+       VALUES ($1, $2, NOW() - interval '1 minute')
+       RETURNING id`,
+      [expiredCode, "https://example.com/expired"],
+    );
+
+    const response = await request(app).get(`/${expiredCode}`).redirects(0);
+
+    expect(response.status).toBe(410);
+    expect(response.body).toEqual({ error: "This link has expired" });
+
+    const clicks = await pool.query(
+      "SELECT id FROM clicks WHERE url_id = $1",
+      [inserted.rows[0].id],
+    );
+    expect(clicks.rows).toHaveLength(0);
   });
 
   it("returns 404 for a missing code", async () => {

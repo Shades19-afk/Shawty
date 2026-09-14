@@ -14,7 +14,11 @@ describe("urlCache", () => {
     get: vi.fn(),
     set: vi.fn(),
   };
-  const value = { longUrl: "https://example.com", urlId: "42" };
+  const value = {
+    longUrl: "https://example.com",
+    urlId: "42",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -32,6 +36,17 @@ describe("urlCache", () => {
   it("returns a miss for an absent cache entry", async () => {
     redis.get.mockResolvedValue(null);
     await expect(urlCache.get("missing")).resolves.toBeUndefined();
+  });
+
+  it("returns a miss for an expired cached URL", async () => {
+    redis.get.mockResolvedValue(
+      JSON.stringify({
+        ...value,
+        expiresAt: new Date(Date.now() - 1_000).toISOString(),
+      }),
+    );
+
+    await expect(urlCache.get("expired")).resolves.toBeUndefined();
   });
 
   it("treats Redis read failures as cache misses", async () => {

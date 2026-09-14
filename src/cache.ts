@@ -4,6 +4,7 @@ import { logger, recordCacheHit, recordCacheMiss } from "./observability";
 export interface CachedUrl {
   longUrl: string;
   urlId: string;
+  expiresAt: string;
 }
 
 const CACHE_KEY_PREFIX = "url:";
@@ -23,7 +24,11 @@ function isCachedUrl(value: unknown): value is CachedUrl {
   }
 
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.longUrl === "string" && typeof candidate.urlId === "string";
+  return (
+    typeof candidate.longUrl === "string" &&
+    typeof candidate.urlId === "string" &&
+    typeof candidate.expiresAt === "string"
+  );
 }
 
 /**
@@ -32,6 +37,9 @@ function isCachedUrl(value: unknown): value is CachedUrl {
  * On Redis failure, reads return a miss so the caller falls through to
  * Postgres, while writes/invalidation are logged and skipped. This keeps
  * redirects available during a cache outage at the cost of more DB traffic.
+ *
+ * Expiration is stored and checked on every cache hit rather than relying only
+ * on Redis TTL, so an entry cannot serve a redirect after its link expires.
  */
 class UrlCache {
   public async get(shortCode: string): Promise<CachedUrl | undefined> {
@@ -47,6 +55,11 @@ class UrlCache {
       if (!isCachedUrl(parsed)) {
         recordCacheMiss();
         logger.warn({ shortCode }, "Ignoring malformed Redis cache entry");
+        return undefined;
+      }
+
+      if (new Date(parsed.expiresAt).getTime() <= Date.now()) {
+        recordCacheMiss();
         return undefined;
       }
 
